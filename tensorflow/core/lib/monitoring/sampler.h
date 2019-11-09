@@ -13,20 +13,26 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef THIRD_PARTY_TENSORFLOW_CORE_LIB_MONITORING_SAMPLER_H_
-#define THIRD_PARTY_TENSORFLOW_CORE_LIB_MONITORING_SAMPLER_H_
+#ifndef TENSORFLOW_CORE_LIB_MONITORING_SAMPLER_H_
+#define TENSORFLOW_CORE_LIB_MONITORING_SAMPLER_H_
+
+// clang-format off
+// Required for IS_MOBILE_PLATFORM
+#include "tensorflow/core/platform/platform.h"
+// clang-format on
 
 // We replace this implementation with a null implementation for mobile
 // platforms.
-#include "tensorflow/core/platform/platform.h"
 #ifdef IS_MOBILE_PLATFORM
 #include "tensorflow/core/lib/monitoring/mobile_sampler.h"
 #else
 
 #include <float.h>
+
 #include <map>
 
 #include "tensorflow/core/framework/summary.pb.h"
+#include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/lib/histogram/histogram.h"
 #include "tensorflow/core/lib/monitoring/collection_registry.h"
 #include "tensorflow/core/lib/monitoring/metric_def.h"
@@ -90,6 +96,11 @@ class Buckets {
   static std::unique_ptr<Buckets> Explicit(
       std::initializer_list<double> bucket_limits);
 
+  // This alternative Explicit Buckets factory method is primarily meant to be
+  // used by the CLIF layer code paths that are incompatible with
+  // initialize_lists.
+  static std::unique_ptr<Buckets> Explicit(std::vector<double> bucket_limits);
+
   virtual const std::vector<double>& explicit_bounds() const = 0;
 };
 
@@ -128,6 +139,8 @@ class Sampler {
   template <typename... Labels>
   SamplerCell* GetCell(const Labels&... labels) LOCKS_EXCLUDED(mu_);
 
+  Status GetStatus() { return status_; }
+
  private:
   friend class SamplerCell;
 
@@ -144,9 +157,18 @@ class Sampler {
               for (const auto& cell : cells_) {
                 metric_collector.CollectValue(cell.first, cell.second.value());
               }
-            })) {}
+            })) {
+    if (registration_handle_) {
+      status_ = Status::OK();
+    } else {
+      status_ = Status(tensorflow::error::Code::ALREADY_EXISTS,
+                       "Another metric with the same name already exists.");
+    }
+  }
 
   mutable mutex mu_;
+
+  Status status_;
 
   // The metric definition. This will be used to identify the metric when we
   // register it for collection.
@@ -159,9 +181,10 @@ class Sampler {
   // Registration handle with the CollectionRegistry.
   std::unique_ptr<CollectionRegistry::RegistrationHandle> registration_handle_;
 
-  // We use a std::map here because we give out pointers to the SamplerCells,
-  // which need to remain valid even after more cells.
   using LabelArray = std::array<string, NumLabels>;
+  // we need a container here that guarantees pointer stability of the value,
+  // namely, the pointer of the value should remain valid even after more cells
+  // are inserted.
   std::map<LabelArray, SamplerCell> cells_ GUARDED_BY(mu_);
 
   TF_DISALLOW_COPY_AND_ASSIGN(Sampler);
@@ -214,4 +237,4 @@ SamplerCell* Sampler<NumLabels>::GetCell(const Labels&... labels)
 }  // namespace tensorflow
 
 #endif  // IS_MOBILE_PLATFORM
-#endif  // THIRD_PARTY_TENSORFLOW_CORE_LIB_MONITORING_SAMPLER_H_
+#endif  // TENSORFLOW_CORE_LIB_MONITORING_SAMPLER_H_

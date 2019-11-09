@@ -14,12 +14,16 @@ limitations under the License.
 ==============================================================================*/
 
 #include "tensorflow/compiler/xla/service/llvm_compiler.h"
+
+#include "absl/memory/memory.h"
+#include "tensorflow/compiler/xla/literal_util.h"
 #include "tensorflow/compiler/xla/service/backend.h"
 #include "tensorflow/compiler/xla/service/cpu/cpu_compiler.h"
-#include "tensorflow/compiler/xla/service/gpu/gpu_compiler.h"
+#include "tensorflow/compiler/xla/service/gpu/nvptx_compiler.h"
 #include "tensorflow/compiler/xla/service/hlo_instruction.h"
 #include "tensorflow/compiler/xla/service/platform_util.h"
 #include "tensorflow/compiler/xla/test_helpers.h"
+#include "tensorflow/compiler/xla/tests/verified_hlo_module.h"
 #include "tensorflow/core/platform/test.h"
 #include "tensorflow/stream_executor/stream_executor.h"
 
@@ -43,7 +47,7 @@ class LLVMCompilerTest : public ::testing::Test {
   ~LLVMCompilerTest() override {}
 
  protected:
-  using Platform = ::perftools::gputools::Platform;
+  using Platform = se::Platform;
 
   explicit LLVMCompilerTest(string platform_name)
       : platform_name_(std::move(platform_name)) {}
@@ -64,17 +68,18 @@ class LLVMCompilerTest : public ::testing::Test {
     // Create HLO module, and run the compiler.
     auto builder = HloComputation::Builder(TestName());
     builder.AddInstruction(
-        HloInstruction::CreateConstant(Literal::CreateR0<float>(42.0)));
+        HloInstruction::CreateConstant(LiteralUtil::CreateR0<float>(42.0)));
 
-    auto hlo_module = CreateNewModule();
+    auto hlo_module = CreateNewVerifiedModule();
     hlo_module->AddEntryComputation(builder.Build());
 
     compiler->SetPreOptimizationHook(pre_opt_hook);
     compiler->SetPostOptimizationHook(post_opt_hook);
 
     ASSERT_TRUE(compiler
-                    ->Compile(std::move(hlo_module),
-                              backend_->default_stream_executor())
+                    ->RunBackend(std::move(hlo_module),
+                                 backend_->default_stream_executor(),
+                                 /*device_allocator=*/nullptr)
                     .ok());
 
     // Test that hooks were called.
@@ -82,15 +87,31 @@ class LLVMCompilerTest : public ::testing::Test {
     EXPECT_EQ(1, post_opt_hook_call_count);
   }
 
+  void TestMultiModuleCompilation(LLVMCompiler *compiler) {
+    HloComputation::Builder builder(TestName());
+    builder.AddInstruction(
+        HloInstruction::CreateConstant(LiteralUtil::CreateR0<float>(42.0)));
+
+    std::unique_ptr<HloModule> hlo_module = CreateNewVerifiedModule();
+    hlo_module->AddEntryComputation(builder.Build());
+
+    auto module_group = absl::make_unique<HloModuleGroup>("test_module_group");
+    module_group->push_back(hlo_module->Clone());
+    module_group->push_back(std::move(hlo_module));
+
+    std::vector<std::vector<se::StreamExecutor *>> executors;
+    executors.push_back({backend_->default_stream_executor()});
+    executors.push_back({backend_->default_stream_executor()});
+
+    EXPECT_IS_OK(compiler->Compile(std::move(module_group),
+                                   std::move(executors),
+                                   /*device_allocator=*/nullptr));
+  }
+
  private:
   Platform *FindPlatform() {
-    for (Platform *platform :
-         PlatformUtil::GetSupportedPlatforms().ConsumeValueOrDie()) {
-      if (platform->Name() == platform_name_) {
-        return platform;
-      }
-    }
-    return nullptr;
+    auto status_or_platform = PlatformUtil::GetPlatform(platform_name_);
+    return status_or_platform.ok() ? status_or_platform.ValueOrDie() : nullptr;
   }
 
   string platform_name_;
@@ -100,11 +121,13 @@ class LLVMCompilerTest : public ::testing::Test {
     return ::testing::UnitTest::GetInstance()->current_test_info()->name();
   }
 
-  static std::unique_ptr<HloModule> CreateNewModule() {
+  std::unique_ptr<HloModule> CreateNewVerifiedModule() {
     HloModuleConfig config;
-    config.set_debug_options(legacy_flags::GetDebugOptionsFromFlags());
-    return MakeUnique<HloModule>(TestName(), VersionedComputationHandle(),
-                                 config);
+    config.set_debug_options(GetDebugOptionsFromFlags());
+    return absl::make_unique<VerifiedHloModule>(
+        TestName(), config, /*verifier_layout_sensitive=*/false,
+        /*allow_mixed_precision_in_hlo_verifier=*/true,
+        backend_->compiler()->ShapeSizeBytesFunction());
   }
 };
 
@@ -124,9 +147,18 @@ TEST_F(CpuCompilerTest, HooksTest) {
 }
 
 TEST_F(GpuCompilerTest, HooksTest) {
-  gpu::GpuCompiler compiler;
+  gpu::NVPTXCompiler compiler;
   TestCompilerHooks(&compiler);
 }
 
+TEST_F(CpuCompilerTest, CpuMultiModuleCompilation) {
+  cpu::CpuCompiler compiler;
+  TestMultiModuleCompilation(&compiler);
+}
+
+TEST_F(GpuCompilerTest, NVPTXMultiModuleCompilation) {
+  gpu::NVPTXCompiler compiler;
+  TestMultiModuleCompilation(&compiler);
+}
 }  // namespace
 }  // namespace xla

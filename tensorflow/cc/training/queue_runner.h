@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef THIRD_PARTY_TENSORFLOW_CC_TRAINING_QUEUE_RUNNER_H_
-#define THIRD_PARTY_TENSORFLOW_CC_TRAINING_QUEUE_RUNNER_H_
+#ifndef TENSORFLOW_CC_TRAINING_QUEUE_RUNNER_H_
+#define TENSORFLOW_CC_TRAINING_QUEUE_RUNNER_H_
 
 #include <memory>
 #include <string>
@@ -23,11 +23,11 @@ limitations under the License.
 
 #include "tensorflow/cc/training/coordinator.h"
 #include "tensorflow/core/lib/core/blocking_counter.h"
-#include "tensorflow/core/lib/core/error_codes.pb.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/lib/core/threadpool.h"
 #include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/protobuf/config.pb.h"
+#include "tensorflow/core/protobuf/error_codes.pb.h"
 #include "tensorflow/core/protobuf/queue_runner.pb.h"
 #include "tensorflow/core/public/session.h"
 
@@ -137,4 +137,4 @@ class QueueRunner : public RunnerInterface {
 
 }  // namespace tensorflow
 
-#endif  // THIRD_PARTY_TENSORFLOW_CC_TRAINING_QUEUE_RUNNER_H_
+#endif  // TENSORFLOW_CC_TRAINING_QUEUE_RUNNER_H_

@@ -18,170 +18,172 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import collections
 import contextlib
-import threading
 
 from tensorflow.python import pywrap_tensorflow
+from tensorflow.python.util.lazy_loader import LazyLoader
 
-
-def tid(tensor):
-  return tensor._id  # pylint: disable=protected-access
-
-
-class TapeEntry(
-    collections.namedtuple("TapeEntry", [
-        "op_type",
-        "output_ids", "input_ids", "backward_function",
-        "output_shape_and_dtype",
-    ])):
-  """Entry in the gradient tape.
-
-  Represents the execution of one op or function, with instructions for doing
-  its backward pass and useful information for it.
-
-  Args:
-   output_ids: tensor_id(t) for each output tensor T
-   input_ids: tensor_id(t) for each input tensor T
-   backward_function: function to be called with the downstream gradients and
-    side outputs as arguments which computes the backward pass.
-   output_shape_and_dtype: a list of (shape_tuple, dtype) for every output
-    tensor_id
-  """
-
-
-def _tensor_shape(t):
-  return t._shape_tuple()  # pylint: disable=protected-access
+# There is a circular dependency between this, ops.py, and
+# distribution_strategy_context.
+# TODO(b/117329403): Remove this circular dependency.
+distribution_strategy_context = LazyLoader(
+    "distribution_strategy_context", globals(),
+    "tensorflow.python.distribute."
+    "distribution_strategy_context")
 
 
 class Tape(object):
   """Represents a gradient propagation trace."""
 
-  def __init__(self):
-    self._tape = pywrap_tensorflow.TFE_Py_NewTape()
-    self._watched_variables = set()
+  def __init__(self, tape):
+    self._tape = tape
 
-  def should_record(self, tensors):
-    """Returns true if any tensor should be recorded.
-
-    Args:
-      tensors: some tensors.
-
-    Returns:
-      True if any of the tensors is in the tape.
-    """
-    return pywrap_tensorflow.TFE_Py_TapeShouldRecord(
-        self._tape, tensors)
-
-  def watch(self, tensor):
-    """Adds a tensor to the tape."""
-    pywrap_tensorflow.TFE_Py_TapeWatch(self._tape, tid(tensor))
-
-  def watch_variable(self, v):
-    self._watched_variables.add(v)
-    self.watch(v.handle)
-
-  def record_operation(self, op_type, output_tensors, input_tensors,
-                       backward_function):
-    """Records an operation in the tape."""
-    pywrap_tensorflow.TFE_Py_TapeRecordOperation(
-        self._tape,
-        op_type,
-        output_tensors,
-        input_tensors,
-        backward_function)
-
-  def _delete_tensor_id(self, i):
-    pywrap_tensorflow.TFE_Py_TapeDeleteTrace(self._tape, i)
-
-  def delete_trace(self, tensor_id):
-    """Deletes any trace we have for this tensor."""
-    self._delete_tensor_id(tensor_id)
+  def watched_variables(self):
+    return pywrap_tensorflow.TFE_Py_TapeWatchedVariables(self._tape)
 
 
-class _TapeStack(threading.local):
-
-  def __init__(self):
-    super(_TapeStack, self).__init__()
-    self._stack = []
-
-  @property
-  def stack(self):
-    return self._stack
-
-
-# The global tape stack.
-_tape_stack = _TapeStack()
-
-
-def push_new_tape():
+def push_new_tape(persistent=False, watch_accessed_variables=True):
   """Pushes a new tape onto the tape stack."""
-  _tape_stack.stack.append(Tape())
+  tape = pywrap_tensorflow.TFE_Py_TapeSetNew(persistent,
+                                             watch_accessed_variables)
+  return Tape(tape)
 
 
-def watch(tensor):
-  """Marks this tensor to be watched by all tapes in the stack.
-
-  Args:
-    tensor: tensor to be watched.
-  """
-  for t in _tape_stack.stack:
-    t.watch(tensor)
+def push_tape(tape):
+  """Pushes an existing tape onto the tape stack."""
+  pywrap_tensorflow.TFE_Py_TapeSetAdd(tape._tape)  # pylint: disable=protected-access
 
 
-def watch_variable(variable):
-  """Marks this variable to be watched by all tapes in the stack.
+def watch(tape, tensor):
+  """Marks this tensor to be watched by the given tape."""
+  pywrap_tensorflow.TFE_Py_TapeWatch(tape._tape, tensor)  # pylint: disable=protected-access
+
+
+def watch_variable(tape, variable):
+  """Marks this variable to be watched by the given tape."""
+  strategy, context = (
+      distribution_strategy_context.get_strategy_and_replica_context())
+  if context:
+    variables = [strategy.extended.value_container(variable)]
+  else:
+    variables = strategy.experimental_local_results(variable)
+  for var in variables:
+    pywrap_tensorflow.TFE_Py_TapeWatchVariable(tape._tape, var)  # pylint: disable=protected-access
+
+
+def variable_accessed(variable):
+  """Notifies all tapes in the stack that a variable has been accessed.
 
   Args:
     variable: variable to be watched.
   """
-  for t in _tape_stack.stack:
-    t.watch_variable(variable)
+  strategy, context = (
+      distribution_strategy_context.get_strategy_and_replica_context())
+  if context:
+    variables = [strategy.extended.value_container(variable)]
+  else:
+    variables = strategy.experimental_local_results(variable)
+  for var in variables:
+    pywrap_tensorflow.TFE_Py_TapeVariableAccessed(var)
 
 
-def pop_tape():
-  """Pops the top tape in the stack, if any."""
-  if _tape_stack.stack:
-    return _tape_stack.stack.pop()
-  return None
+def variables_accessed(variables):
+  """Notifies all tapes in the stack that variables have been accessed.
+
+  Only trainable variables are marked as accessed.
+
+  Args:
+    variables: iterable of variables to mark as accessed.
+  """
+  strategy, context = (
+      distribution_strategy_context.get_strategy_and_replica_context())
+  accessed = []
+  if context:
+    accessed = [strategy.extended.value_container(variable)
+                for variable in variables if variable.trainable]
+  else:
+    for variable in variables:
+      if variable.trainable:
+        accessed.extend(strategy.experimental_local_results(variable))
+
+  for var in accessed:
+    pywrap_tensorflow.TFE_Py_TapeVariableAccessed(var)
+
+
+def pop_tape(tape):
+  """Pops the given tape in the stack."""
+  pywrap_tensorflow.TFE_Py_TapeSetRemove(tape._tape)  # pylint: disable=protected-access
 
 
 @contextlib.contextmanager
 def stop_recording():
-  old = _tape_stack.stack
-  _tape_stack._stack = []  # pylint: disable=protected-access
+  """Stop all gradient recording (backprop and forwardprop)."""
+  is_stopped = pywrap_tensorflow.TFE_Py_TapeSetIsStopped()
   try:
+    if not is_stopped:
+      pywrap_tensorflow.TFE_Py_TapeSetStopOnThread()
     yield
   finally:
-    _tape_stack._stack = old  # pylint: disable=protected-access
+    if not is_stopped:
+      pywrap_tensorflow.TFE_Py_TapeSetRestartOnThread()
 
 
-def should_record(tensors):
-  """Returns true if any tape in the stack watches any of these tensors."""
-  if not _tape_stack.stack:
-    return False
-  return any(x.should_record(tensors) for x in _tape_stack.stack)
+def should_record_backprop(tensors):
+  """Returns true if any tape in the stack watches any of these tensors.
+
+  Only takes GradientTapes into account, not forward accumulators.
+
+  Args:
+    tensors: Tensors to check, typically inputs to an operation.
+
+  Returns:
+    Boolean, whether any tape watches any of `tensors`.
+  """
+  return pywrap_tensorflow.TFE_Py_TapeSetShouldRecordBackprop(tensors)
 
 
-def record_operation(op_type, output_tensors, input_tensors, backward_function):
+def record_operation(op_type, output_tensors, input_tensors, backward_function,
+                     forward_function=None):
   """Records the operation on all tapes in the stack."""
-  for t in _tape_stack.stack:
-    t.record_operation(op_type, output_tensors,
-                       input_tensors,
-                       backward_function)
+  pywrap_tensorflow.TFE_Py_TapeSetRecordOperation(
+      op_type, output_tensors, input_tensors, backward_function,
+      forward_function)
+
+
+def record_operation_backprop_only(op_type, output_tensors, input_tensors,
+                                   backward_function):
+  """Records the operation on all backward tapes in the stack."""
+  pywrap_tensorflow.TFE_Py_TapeSetRecordOperationBackprop(
+      op_type, output_tensors, input_tensors, backward_function)
+
+
+def record_operation_forwardprop_only(op_type, output_tensors, input_tensors,
+                                      backward_function,
+                                      forwardprop_output_indices):
+  """Records the operation on all forward accumulators in the stack.
+
+  Args:
+    op_type: a string for the operation type, used in the backprop code
+    output_tensors: a list of Python Tensor objects output by the operation
+    input_tensors: a list of input Tensors to the recorded operation
+    backward_function: the function to be called to, given the gradients of the
+      output tensors, produce the gradients of the input tensors. This function
+      is automatically transposed to produce output gradients given input
+      gradients.
+    forwardprop_output_indices: indicates any output_tensors which contain JVPs.
+      Typically these will have come from TFE_Py_PackForwardGradients. May be
+      None or an empty sequence if there are no JVP outputs from the operation.
+  """
+  pywrap_tensorflow.TFE_Py_TapeSetRecordOperationForwardprop(
+      op_type, output_tensors, input_tensors, backward_function,
+      forwardprop_output_indices)
 
 
 def delete_trace(tensor_id):
   """Deletes traces for this Tensor from all tapes in the stack."""
-  for t in _tape_stack.stack:
-    t.delete_trace(tensor_id)
-
-
-def top_tape_watched_variables():
-  t = _tape_stack.stack[-1]
-  return t._watched_variables  # pylint: disable=protected-access
+  pywrap_tensorflow.TFE_Py_TapeSetDeleteTrace(tensor_id)
 
 
 def could_possibly_record():
   """Returns True if any tape is active."""
-  return len(_tape_stack.stack) > 0  # pylint: disable=g-explicit-length-test
+  return not pywrap_tensorflow.TFE_Py_TapeSetIsEmpty()

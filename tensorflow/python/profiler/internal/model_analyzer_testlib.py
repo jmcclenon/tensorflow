@@ -19,7 +19,7 @@ from __future__ import print_function
 
 import contextlib
 
-from tensorflow.python import pywrap_tensorflow as print_mdl
+from tensorflow.python import _pywrap_tfprof as print_mdl
 from tensorflow.python.framework import dtypes
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import init_ops
@@ -109,3 +109,9 @@ def ProfilerFromFile(profile_file):
   profiler = model_analyzer.Profiler.__new__(model_analyzer.Profiler)
   yield profiler
   print_mdl.DeleteProfiler()
+
+
+def CheckAndRemoveDoc(profile):
+  assert 'Doc:' in profile
+  start_pos = profile.find('Profile:')
+  return profile[start_pos + 9:]

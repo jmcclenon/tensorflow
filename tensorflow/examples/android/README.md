@@ -9,9 +9,9 @@ The demos in this folder are designed to give straightforward samples of using
 TensorFlow in mobile applications.
 
 Inference is done using the [TensorFlow Android Inference
-Interface](../../../tensorflow/contrib/android), which may be built separately
-if you want a standalone library to drop into your existing application. Object
-tracking and efficient YUV -> RGB conversion are handled by
+Interface](../../tools/android/inference_interface), which may be built
+separately if you want a standalone library to drop into your existing
+application. Object tracking and efficient YUV -> RGB conversion are handled by
 `libtensorflow_demo.so`.
 
 A device running Android 5.0 (API 21) or higher is required to run the demo due
@@ -45,15 +45,11 @@ on API >= 14 devices.
 
 ## Prebuilt Components:
 
-If you just want the fastest path to trying the demo, you may download the
-nightly build
-[here](https://ci.tensorflow.org/view/Nightly/job/nightly-android/). Expand the
-"View" and then the "out" folders under "Last Successful Artifacts" to find
-tensorflow_demo.apk.
+The fastest path to trying the demo is to download the [prebuilt demo APK](https://storage.googleapis.com/download.tensorflow.org/deps/tflite/TfLiteCameraDemo.apk).
 
 Also available are precompiled native libraries, and a jcenter package that you
 may simply drop into your own applications. See
-[tensorflow/contrib/android/README.md](../../../tensorflow/contrib/android/README.md)
+[tensorflow/tools/android/inference_interface/README.md](../../tools/android/inference_interface/README.md)
 for more details.
 
 ## Running the Demo
@@ -93,7 +89,7 @@ For any project that does not include custom low level TensorFlow code, this is
 likely sufficient.
 
 For details on how to include this JCenter package in your own project see
-[tensorflow/contrib/android/README.md](../../../tensorflow/contrib/android/README.md)
+[tensorflow/tools/android/inference_interface/README.md](../../tools/android/inference_interface/README.md)
 
 ## Building the Demo with TensorFlow from Source
 
@@ -113,8 +109,9 @@ protobuf compilation.
 
 NOTE: Bazel does not currently support building for Android on Windows. Full
 support for gradle/cmake builds is coming soon, but in the meantime we suggest
-that Windows users download the [prebuilt
-binaries](https://ci.tensorflow.org/view/Nightly/job/nightly-android/) instead.
+that Windows users download the
+[prebuilt demo APK](https://storage.googleapis.com/download.tensorflow.org/deps/tflite/TfLiteCameraDemo.apk)
+instead.
 
 ##### Install Bazel and Android Prerequisites
 
@@ -134,6 +131,10 @@ the Android NDK and SDK must be installed on your system.
     devices).
 
 ##### Edit WORKSPACE
+
+NOTE: As long as you have the SDK and NDK installed, the `./configure` script
+will create these rules for you. Answer "Yes" when the script asks to
+automatically configure the `./WORKSPACE`.
 
 The Android entries in
 [`<workspace_root>/WORKSPACE`](../../../WORKSPACE#L19-L36) must be uncommented
@@ -156,7 +157,7 @@ download-models.gradle.
 
 **Optional**: If you wish to place the models in your assets manually, remove
 all of the `model_files` entries from the `assets` list in `tensorflow_demo`
-found in the `[BUILD](BUILD)` file. Then download and extract the archives
+found in the [`BUILD`](BUILD#L92) file. Then download and extract the archives
 yourself to the `assets` directory in the source tree:
 
 ```bash
@@ -181,7 +182,7 @@ After editing your WORKSPACE file to update the SDK/NDK configuration, you may
 build the APK. Run this from your workspace root:
 
 ```bash
-bazel build -c opt //tensorflow/examples/android:tensorflow_demo
+bazel build --cxxopt='--std=c++11' -c opt //tensorflow/examples/android:tensorflow_demo
 ```
 
 ##### Install
@@ -211,4 +212,4 @@ NDK).
 
 Full CMake support for the demo is coming soon, but for now it is possible to
 build the TensorFlow Android Inference library using
-[tensorflow/contrib/android/cmake](../../../tensorflow/contrib/android/cmake).
+[tensorflow/tools/android/inference_interface/cmake](../../tools/android/inference_interface/cmake).

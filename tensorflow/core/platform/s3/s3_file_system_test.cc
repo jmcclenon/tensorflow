@@ -16,7 +16,6 @@ limitations under the License.
 #include "tensorflow/core/platform/s3/s3_file_system.h"
 
 #include "tensorflow/core/lib/core/status_test_util.h"
-#include "tensorflow/core/lib/gtl/stl_util.h"
 #include "tensorflow/core/lib/io/path.h"
 #include "tensorflow/core/platform/file_system.h"
 #include "tensorflow/core/platform/test.h"
@@ -130,6 +129,8 @@ TEST_F(S3FileSystemTest, NewReadOnlyMemoryRegionFromFile) {
 
 TEST_F(S3FileSystemTest, FileExists) {
   const string fname = TmpDir("FileExists");
+  // Ensure the file doesn't yet exist.
+  TF_ASSERT_OK(s3fs.DeleteFile(fname));
   EXPECT_EQ(error::Code::NOT_FOUND, s3fs.FileExists(fname).code());
   TF_ASSERT_OK(WriteString(fname, "test"));
   TF_EXPECT_OK(s3fs.FileExists(fname));
